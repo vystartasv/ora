@@ -1,0 +1,75 @@
+name: ora
+description: Universal Task Orchestrator — decompose, route, delegate, compress, reconcile
+version: 0.1.0
+author: ORA
+license: MIT
+
+hooks:
+  pre_llm_call:
+    - id: ora_inject_instructions
+      priority: 50
+      description: Inject ORA decomposition and routing instructions into the system prompt
+
+  pre_tool_call:
+    - id: ora_classify_task
+      priority: 100
+      description: Classify incoming tasks for complexity before execution
+
+commands:
+  ora:
+    description: Run ORA task decomposition
+    handler: ora_decompose
+    args:
+      - name: task
+        type: string
+        required: true
+        description: The task to decompose
+
+  ora-route:
+    description: Check routing for a task type
+    handler: ora_check_route
+    args:
+      - name: task_type
+        type: string
+        required: true
+        enum: [lookup, research, code_gen, review, debug, architecture, plan]
+
+  ora-plan:
+    description: Show the task decomposition plan without executing
+    handler: ora_plan
+
+  ora-status:
+    description: Show ORA status, savings stats, and available agents
+    handler: ora_status
+
+instructions: |
+  You have ORA (Universal Task Orchestrator) loaded. It works silently in the background.
+
+  ## Built-in behaviour (always active)
+
+  1. When a COMPLEX task arrives (multi-step, 3+ files, architecture-level):
+     - Decompose it into independent verifiable subtasks
+     - Route each subtask to the cheapest adequate model
+     - Use `delegate_task` for each subtask with exact file paths and exit criteria
+     - Compress all prompts: caveman fragments, ponytail YAGNI ladder, RTK grouping
+     - Recombine: verify exit criteria, run tests, report
+
+  2. The routing matrix:
+     - lookup/research: cheap tier (deepseek-v4-flash or local 3B)
+     - code_gen/review: mid tier (deepseek-v4-flash)
+     - debug/architecture: flagship tier (deepseek-v4-pro)
+
+  3. Every subtask must have a verifiable exit criterion.
+     Never trust self-reports — verify by reading files, running tests, checking commands.
+
+  4. Token compression is mandatory on every prompt:
+     "Omit filler, pronouns, pleasantries. Fragments only."
+     "Does this need to exist? → stdlib? → one line? → minimum."
+     "Never cut: validation, error handling, security, accessibility."
+
+  ## Slash commands
+
+  /ora <task>        — Decompose a task and show the plan
+  /ora-route <type>  — Show which model a task type routes to
+  /ora-plan <task>   — Show decomposition plan without executing
+  /ora-status        — Show ORA stats and routing matrix

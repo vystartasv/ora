@@ -3,6 +3,7 @@ package ora
 
 import (
 	"encoding/json"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -226,6 +227,60 @@ func GetRoute(tt TaskType, mode string) Route {
 	}
 
 	return Route{Tier: tier, Model: model, CostFactor: costFactor, Reason: r.Desc}
+}
+
+// DetectLocalModels returns available local LLM models from Ollama and oMLX.
+func DetectLocalModels() []string {
+	var models []string
+
+	// 1. Check oMLX API at default local address
+	resp, err := http.Get("http://127.0.0.1:8000/v1/models")
+	if err == nil {
+		defer resp.Body.Close()
+		var data struct {
+			Data []struct {
+				ID string `json:"id"`
+			} `json:"data"`
+		}
+		if json.NewDecoder(resp.Body).Decode(&data) == nil {
+			for _, m := range data.Data {
+				models = append(models, "omlx:"+m.ID)
+			}
+		}
+	}
+
+	// 2. Check Ollama
+	if exec.Command("ollama", "list").Run() == nil {
+		out, err := exec.Command("ollama", "list").Output()
+		if err == nil {
+			for _, line := range strings.Split(string(out), "\n") {
+				parts := strings.Fields(line)
+				if len(parts) >= 1 && parts[0] != "NAME" {
+					models = append(models, "ollama:"+parts[0])
+				}
+			}
+		}
+	}
+
+	return models
+}
+
+// PickSmallestModel returns the smallest available model (best for summaries).
+func PickSmallestModel(models []string) string {
+	prefs := []string{"1.5b", "tiny", "phi", "gemma2:2b", "qwen2.5:0.5b",
+		"smollm", "llama3.2", "3b", "4b", "7b"}
+	for _, m := range models {
+		low := strings.ToLower(m)
+		for _, p := range prefs {
+			if strings.Contains(low, p) {
+				return m
+			}
+		}
+	}
+	if len(models) > 0 {
+		return models[0]
+	}
+	return ""
 }
 
 // TopologicalSort orders subtasks by dependency.

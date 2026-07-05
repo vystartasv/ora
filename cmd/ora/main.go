@@ -205,7 +205,7 @@ instructions: |
 	os.WriteFile(pluginDir+"/plugin.yaml", []byte(pluginYaml), 0644)
 	fmt.Println("  ✅ Plugin: " + pluginDir)
 
-	// 2. Register MCP server — write directly to config.yaml instead of CLI
+	// 2. Register MCP server — write directly to config.yaml
 	if binary := findBinary(); binary != "" {
 		cfgPath := hermesDir + "/config.yaml"
 		if data, err := os.ReadFile(cfgPath); err == nil {
@@ -217,17 +217,14 @@ instructions: |
     args: ["--serve"]
     connect_timeout: 10
 `, binary)
-				// Insert before first tool definition or at end
 				if idx := strings.Index(content, "mcp_servers:"); idx >= 0 {
-					// Find the end of mcp_servers section or end of file
 					insertPoint := idx + 12
-					if endIdx := strings.Index(content[insertPoint:], "\n\n"); endIdx >= 0 {
+					if endIdx := strings.Index(content[insertPoint:], "\n  "); endIdx >= 0 && endIdx < 20 {
 						content = content[:insertPoint+endIdx] + mcpBlock + content[insertPoint+endIdx:]
 					} else {
 						content += mcpBlock
 					}
 				} else {
-					// Add mcp_servers section
 					content += "\nmcp_servers:" + mcpBlock
 				}
 				os.WriteFile(cfgPath, []byte(content), 0644)
@@ -240,23 +237,23 @@ instructions: |
 		}
 	}
 
-	// 3. Copy ORA.md to Hermes AGENTS.md
+	// 3. Copy ORA.md to Hermes dir
 	oraMd := hermesDir + "/ORA.md"
 	os.WriteFile(oraMd, []byte(`# ORA — Always active in Hermes
 
 On complex tasks: decompose into subtasks, route to cheapest adequate model, delegate via subagents, compress all output, recompose and verify.
 
 ## Routing
-- lookup/research → deepseek-v4-flash (cheap)
+- lookup/research → deepseek-v4-flash or local (cheap)
 - code_gen/review → deepseek-v4-flash (mid)
 - debug/architecture → deepseek-v4-pro (flagship)
 
-## Compression (mandatory every turn)
-1. Omit filler, pronouns, pleasantries. Fragments.
-2. YAGNI ladder: exist? → codebase? → stdlib? → native? → dep? → one line? → minimum.
+## Compression
+1. Omit filler. Fragments.
+2. YAGNI ladder: exist? → codebase? → stdlib? → native? → one line? → minimum.
 3. Never cut: validation, error handling, security, accessibility.
 `), 0644)
-		fmt.Println("  ✅ Instructions: " + oraMd)
+	fmt.Println("  ✅ Instructions: " + oraMd)
 
 	fmt.Println("\n  " + ora.ColorBold("ORA wired into Hermes."))
 	fmt.Println("  Restart Hermes: hermes")

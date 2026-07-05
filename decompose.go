@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os/exec"
+	"sort"
 	"strings"
 	"time"
 )
@@ -18,10 +19,12 @@ func DecomposeTask(cfg *Config, task, context string) []Subtask {
 		prompt += "\n\nCONTEXT:\n" + context
 	}
 
-	// Try Ollama first (local, free, fast)
-	result := callOllama(cfg, prompt)
+	// Try oMLX first (fast local), then Ollama, then API
+	result := callOMLX(prompt)
 	if result == "" {
-		// Fallback to API
+		result = callOllama(cfg, prompt)
+	}
+	if result == "" {
 		result = callAPI(cfg, prompt)
 	}
 
@@ -59,48 +62,105 @@ func parseSubtasks(raw string) []Subtask {
 }
 
 func callOllama(cfg *Config, prompt string) string {
-	model := strings.SplitN(cfg.LocalModel, ":", 2)[0]
-	if model == "" {
-		model = "qwen2.5-coder"
-	}
-
 	// Check ollama binary exists
 	if _, err := exec.LookPath("ollama"); err != nil {
 		return ""
 	}
 
-	// Check model exists
-	check := exec.Command("ollama", "list")
-	var checkOut bytes.Buffer
-	check.Stdout = &checkOut
-	if err := check.Run(); err != nil {
-		return ""
-	}
-	if !strings.Contains(checkOut.String(), model) {
+	// Get available models
+	models := getOllamaModels()
+	if len(models) == 0 {
 		return ""
 	}
 
-	// Use ollama run with pipe and timeout
-	cmd := exec.Command("ollama", "run", model)
-	cmd.Stdin = strings.NewReader(prompt)
+	// Try each model, smallest first (prefer Qwen, Gemma, Phi for speed)
+	for _, model := range models {
+		// Use ollama run with pipe and timeout
+		cmd := exec.Command("ollama", "run", model)
+		cmd.Stdin = strings.NewReader(prompt)
 
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = nil
+		var out bytes.Buffer
+		cmd.Stdout = &out
+		cmd.Stderr = nil
 
-	// Use a timer to enforce timeout
-	done := make(chan error, 1)
-	go func() {
-		done <- cmd.Run()
-	}()
+		done := make(chan error, 1)
+		go func() {
+			done <- cmd.Run()
+		}()
 
-	select {
-	case <-done:
-		return strings.TrimSpace(out.String())
-	case <-time.After(20 * time.Second):
-		cmd.Process.Kill()
+		select {
+		case <-done:
+			if s := strings.TrimSpace(out.String()); s != "" {
+				return s
+			}
+		case <-time.After(20 * time.Second):
+			cmd.Process.Kill()
+		}
+	}
+	return ""
+}
+
+func getOllamaModels() []string {
+	out, err := exec.Command("ollama", "list").Output()
+	if err != nil {
+		return nil
+	}
+	var models []string
+	for _, line := range strings.Split(string(out), "\n") {
+		parts := strings.Fields(line)
+		if len(parts) >= 1 && parts[0] != "NAME" {
+			models = append(models, parts[0])
+		}
+	}
+	// Sort small models first
+	sortModelsBySize(models)
+	return models
+}
+
+func sortModelsBySize(models []string) {
+	sort.Slice(models, func(i, j int) bool {
+		pref := []string{"0.5b", "1.5b", "2b", "3b", "4b", "7b", "8b", "9b", "13b", "14b", "20b", "30b", "70b"}
+		gi, gj := 99, 99
+		for k, p := range pref {
+			if strings.Contains(strings.ToLower(models[i]), p) {
+				gi = k
+			}
+			if strings.Contains(strings.ToLower(models[j]), p) {
+				gj = k
+			}
+		}
+		return gi < gj
+	})
+}
+
+func callOMLX(prompt string) string {
+	payload := map[string]interface{}{
+		"model": "", // let server decide default
+		"messages": []map[string]string{
+			{"role": "user", "content": prompt},
+		},
+		"max_tokens": 4000,
+		"temperature": 0.2,
+	}
+	data, _ := json.Marshal(payload)
+	resp, err := http.Post("http://127.0.0.1:8000/v1/chat/completions",
+		"application/json", bytes.NewReader(data))
+	if err != nil {
 		return ""
 	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	var result struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if json.Unmarshal(body, &result) == nil && len(result.Choices) > 0 {
+		return strings.TrimSpace(result.Choices[0].Message.Content)
+	}
+	return ""
 }
 
 func callAPI(cfg *Config, prompt string) string {
@@ -173,10 +233,13 @@ Instructions:
 		CompressionPrompt,
 	)
 
-	// Try API first (better quality for execution), then Ollama
-	result := callAPI(cfg, prompt)
+	// Try oMLX → Ollama → API (cheapest first)
+	result := callOMLX(prompt)
 	if result == "" {
 		result = callOllama(cfg, prompt)
+	}
+	if result == "" {
+		result = callAPI(cfg, prompt)
 	}
 
 	status := "completed"

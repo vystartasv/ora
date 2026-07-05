@@ -15,8 +15,9 @@ func main() {
 	fastFlag := flag.Bool("fast", false, "Force cheapest models")
 	deepFlag := flag.Bool("deep", false, "Force flagship models")
 	agentFlag := flag.String("agent", "auto", "Agent: hermes, claude, pi, codex")
-	serveFlag := flag.Bool("serve", false, "Start MCP server")
-	portFlag := flag.Int("port", 8932, "MCP server port")
+	mcpFlag := flag.Bool("mcp", false, "MCP stdio mode (for Claude Code, Cursor)")
+	serveFlag := flag.Bool("serve", false, "Start MCP HTTP server")
+	portFlag := flag.Int("port", 8932, "MCP server port (HTTP mode)")
 	versionFlag := flag.Bool("version", false, "Show version")
 	contextFlag := flag.String("context", "", "Project context")
 
@@ -26,7 +27,8 @@ func main() {
 		fmt.Println(`Usage:`)
 		fmt.Println(`  ora "build auth"                   Full pipeline`)
 		fmt.Println(`  ora --plan "refactor API"           Plan only`)
-		fmt.Println(`  ora --serve                         MCP server`)
+		fmt.Println(`  ora --mcp                           MCP stdio mode (Claude Code)`)
+		fmt.Println(`  ora --serve                         MCP HTTP server`)
 		fmt.Println(`  ora init                            Setup config + ORA.md`)
 		fmt.Println(`  ora init hermes                     Wire into Hermes Agent`)
 		fmt.Println(`  ora init claude                     Wire into Claude Code`)
@@ -49,7 +51,14 @@ func main() {
 		return
 	}
 
-	// MCP server
+	// MCP server — stdio mode (for Claude Code, Cursor, etc.)
+	if *mcpFlag {
+		cfg, _ := ora.LoadConfig("")
+		ora.StartMCPStdio(cfg)
+		return
+	}
+
+	// MCP server — HTTP mode
 	if *serveFlag {
 		cfg, _ := ora.LoadConfig("")
 		if err := ora.StartMCPServer(cfg, *portFlag); err != nil {
@@ -210,11 +219,11 @@ instructions: |
 		cfgPath := hermesDir + "/config.yaml"
 		if data, err := os.ReadFile(cfgPath); err == nil {
 			content := string(data)
-			if !strings.Contains(content, "  ora:") {
+			if !strings.Contains(content, "command:") || !strings.Contains(content, "ora") {
 				mcpBlock := fmt.Sprintf(`
   ora:
     command: %s
-    args: ["--serve"]
+    args: ["--mcp"]
     connect_timeout: 10
 `, binary)
 				if idx := strings.Index(content, "mcp_servers:"); idx >= 0 {
@@ -241,12 +250,15 @@ instructions: |
 	oraMd := hermesDir + "/ORA.md"
 	os.WriteFile(oraMd, []byte(`# ORA — Always active in Hermes
 
-On complex tasks: decompose into subtasks, route to cheapest adequate model, delegate via subagents, compress all output, recompose and verify.
+ORA provides MCP tools: ora_decompose, ora_route, ora_execute.
+
+## Decomposition workflow
+On complex tasks: call ora_decompose → review plan → route each subtask → execute cheapest-first → verify.
 
 ## Routing
-- lookup/research → deepseek-v4-flash or local (cheap)
-- code_gen/review → deepseek-v4-flash (mid)
-- debug/architecture → deepseek-v4-pro (flagship)
+- lookup/research → cheap (deepseek-v4-flash or local)
+- code_gen/review → mid (deepseek-v4-flash)
+- debug/architecture → flagship (deepseek-v4-pro)
 
 ## Compression
 1. Omit filler. Fragments.
@@ -263,20 +275,32 @@ On complex tasks: decompose into subtasks, route to cheapest adequate model, del
 func installClaude() {
 	home, _ := os.UserHomeDir()
 
-	// 1. Register MCP server in Claude Code config
+	// 1. Register MCP server in stdio mode
 	claudeDir := home + "/.claude"
 	os.MkdirAll(claudeDir, 0755)
 
 	if binary := findBinary(); binary != "" {
-		// Try claude mcp add
-		cmd := exec.Command("claude", "mcp", "add", "ora",
-			"--", binary, "--serve")
-		if out, err := cmd.CombinedOutput(); err == nil {
-			fmt.Println("  ✅ MCP: ora registered with Claude Code")
+		// Write Claude Code MCP config directly
+		mcpConfig := fmt.Sprintf(`{
+  "mcpServers": {
+    "ora": {
+      "command": "%s",
+      "args": ["--mcp"]
+    }
+  }
+}`, binary)
+
+		settingsPath := claudeDir + "/mcp.json"
+		os.WriteFile(settingsPath, []byte(mcpConfig), 0644)
+		fmt.Println("  ✅ MCP config: " + settingsPath)
+
+		// Also try claude CLI
+		cmd2 := exec.Command("claude", "mcp", "add", "ora",
+			"--", binary, "--mcp")
+		if _, err := cmd2.CombinedOutput(); err == nil {
+			fmt.Println("  ✅ MCP: ora registered with Claude Code CLI")
 		} else {
-			fmt.Printf("  ⚠️  Claude MCP registration: %s\n", string(out))
-			// Write settings.json directly as fallback
-			fmt.Println("  💡 Or configure manually: claude mcp add ora -- " + binary + " --serve")
+			fmt.Printf("  💡 Claude MCP config written to %s\n", settingsPath)
 		}
 	}
 
@@ -285,15 +309,25 @@ func installClaude() {
 	if _, err := os.Stat(oraFile); os.IsNotExist(err) {
 		os.WriteFile(oraFile, []byte(`# ORA Instructions for Claude Code
 
-## On complex tasks
-Decompose → route → delegate → compress → verify.
+ORA is active via MCP. You have these MCP tools:
+  - ora_decompose: break a task into subtasks
+  - ora_route: check what model a task type should use
+  - ora_execute: run a subtask on the cheapest adequate model
 
-## Routing
-- lookup/research → haiku (cheap)
-- code_gen/review → sonnet (mid)
-- debug/architecture → sonnet (flagship)
+## Decomposition workflow
+On complex tasks (3+ files, architecture-level, multi-step):
+1. Call ora_decompose with the task description
+2. Review the subtask plan
+3. For each subtask, call ora_route to check what model tier to use
+4. Execute subtasks in dependency order, cheapest model first
+5. Verify results, don't trust self-reports
 
-## Compression (mandatory)
+## Routing (use as guidance)
+- lookup/research → cheap (haiku / deepseek-v4-flash)
+- code_gen/review → mid (sonnet / deepseek-v4-flash)
+- debug/architecture → flagship (sonnet / deepseek-v4-pro)
+
+## Compression (always apply)
 1. Omit filler. Fragments.
 2. YAGNI ladder: exist? → stdlib? → one line? → minimum.
 3. Never cut: validation, error handling, security, accessibility.
@@ -318,7 +352,7 @@ func installPi() {
   "mcpServers": {
     "ora": {
       "command": "%s",
-      "args": ["--serve"]
+      "args": ["--mcp"]
     }
   }
 }`, binary)

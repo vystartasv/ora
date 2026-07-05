@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 )
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -183,6 +184,21 @@ func mcpErrorResponse(id int, code int, msg string) mcpResponse {
 	return mcpResponse{
 		JSONRPC: "2.0", ID: id,
 		Error: &mcpError{Code: code, Message: msg},
+	}
+}
+
+// StartMCPStdio runs the MCP server in stdio mode (for Claude Code, Cursor, etc.).
+// Reads JSON-RPC from stdin, writes responses to stdout.
+func StartMCPStdio(cfg *Config) {
+	decoder := json.NewDecoder(os.Stdin)
+	for {
+		var req mcpRequest
+		if err := decoder.Decode(&req); err != nil {
+			break
+		}
+		resp := handleMCP(req, cfg)
+		json.NewEncoder(os.Stdout).Encode(resp)
+		os.Stdout.Write([]byte("\n"))
 	}
 }
 

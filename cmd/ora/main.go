@@ -7,7 +7,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/vilius/ora"
+	"github.com/vystartasv/ora"
 )
 
 func main() {

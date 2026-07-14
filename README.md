@@ -14,14 +14,17 @@ Drop it in. It works with any agent (Claude Code, Codex, Pi, Cursor, Cline, Herm
 
 ```bash
 # Install
-git clone https://github.com/yourname/ora ~/projects/ora
-ln -sf ~/projects/ora/cli/ora ~/.local/bin/ora
+go install github.com/vystartasv/ora/cmd/ora@latest
+
+# Or build from source
+git clone https://github.com/vystartasv/ora
+cd ora && go build ./cmd/ora
 
 # Use
 ora "build a login system with JWT"
-ora "refactor the API to use async handlers and add tests"
 ora "design the database schema for a multi-tenant SaaS" --plan
 ora "fix the race condition in the worker pool" --fast
+ora "review the authentication flow" --agent codex
 ```
 
 ## How it works
@@ -88,21 +91,31 @@ Drop `ORA.md` into any agent that reads rules files. It teaches the agent the sa
 
 ```
 ora/
-├── cli/
-│   ├── ora          # Shell entry (bash wrapper)
-│   └── ora.py       # Python implementation (the engine)
-├── mcp/
-│   └── server.py    # MCP server (for MCP-capable agents)
-├── ORA.md           # Universal prompt (for any agent)
-└── README.md        # This file
+├── cmd/ora/main.go    # CLI entry point (flags: --plan, --fast, --deep, --mcp, --serve)
+├── ora.go             # Core types, routing, model detection, config
+├── decompose.go       # LLM-based task decomposition (oMLX → Ollama → API)
+├── orchestrate.go     # Pipeline orchestration: decompose → route → execute → reconcile
+├── mcp.go             # MCP server (stdio + HTTP, provides ora_decompose/route/execute tools)
+├── ORA.md             # Universal agent prompt
+├── CLAUDE.md          # Claude Code instructions
+├── README.md          # This file
+└── go.mod             # module github.com/vystartasv/ora
 ```
+
+Pure Go. The MCP server is implemented in Go via `mcp.go`: stdio mode for Claude Code/Cursor and HTTP mode for Hermes.
 
 ## Environment
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ORA_API_KEY` | auto-detect | API key for model routing |
-| `ORA_API_BASE` | `https://api.deepseek.com` | API base URL |
-| `ORA_MODE` | `balanced` | Default mode: cheap, balanced, deep |
+| `ORA_API_KEY` | auto-detect | API key (fallback: DEEPSEEK_API_KEY, OPENAI_API_KEY) |
+| `ORA_API_BASE` | `https://api.deepseek.com/v1` | API base URL |
+| `ORA_API_MODEL` | `deepseek-v4-flash` | Model override |
+| `ORA_MODE` | `balanced` | Mode: fast, balanced, deep |
+| `ORA_AGENT` | `auto` | Agent: hermes, claude, pi, codex |
 
-Auto-detects `DEEPSEEK_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY` as fallbacks.
+Auto-detects `DEEPSEEK_API_KEY` and `OPENAI_API_KEY` as fallbacks.
+
+## License
+
+MIT — see [LICENSE](LICENSE)

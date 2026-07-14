@@ -1,3 +1,3 @@
-module github.com/vilius/ora
+module github.com/vystartasv/ora
 
 go 1.26

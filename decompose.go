@@ -20,19 +20,19 @@ func DecomposeTask(cfg *Config, task, context string) []Subtask {
 	}
 
 	// Try oMLX first (fast local), then Ollama, then API
-	result := callOMLX(prompt)
-	if result == "" {
-		result = callOllama(cfg, prompt)
+	resp := callOMLX(prompt)
+	if resp.Content == "" {
+		resp = callOllama(cfg, prompt)
 	}
-	if result == "" {
-		result = callAPI(cfg, prompt)
+	if resp.Content == "" {
+		resp = callAPI(cfg, prompt)
 	}
 
-	if result == "" {
+	if resp.Content == "" {
 		return nil
 	}
 
-	return parseSubtasks(result)
+	return parseSubtasks(resp.Content)
 }
 
 func parseSubtasks(raw string) []Subtask {
@@ -61,16 +61,16 @@ func parseSubtasks(raw string) []Subtask {
 	return nil
 }
 
-func callOllama(cfg *Config, prompt string) string {
+func callOllama(cfg *Config, prompt string) llmResponse {
 	// Check ollama binary exists
 	if _, err := exec.LookPath("ollama"); err != nil {
-		return ""
+		return llmResponse{}
 	}
 
 	// Get available models
 	models := getOllamaModels()
 	if len(models) == 0 {
-		return ""
+		return llmResponse{}
 	}
 
 	// Try each model, smallest first (prefer Qwen, Gemma, Phi for speed)
@@ -91,13 +91,13 @@ func callOllama(cfg *Config, prompt string) string {
 		select {
 		case <-done:
 			if s := strings.TrimSpace(out.String()); s != "" {
-				return s
+				return llmResponse{Content: s}
 			}
 		case <-time.After(20 * time.Second):
 			cmd.Process.Kill()
 		}
 	}
-	return ""
+	return llmResponse{}
 }
 
 func getOllamaModels() []string {
@@ -133,20 +133,20 @@ func sortModelsBySize(models []string) {
 	})
 }
 
-func callOMLX(prompt string) string {
+func callOMLX(prompt string) llmResponse {
 	payload := map[string]interface{}{
 		"model": "", // let server decide default
 		"messages": []map[string]string{
 			{"role": "user", "content": prompt},
 		},
-		"max_tokens": 4000,
+		"max_tokens":  4000,
 		"temperature": 0.2,
 	}
 	data, _ := json.Marshal(payload)
 	resp, err := http.Post("http://127.0.0.1:8000/v1/chat/completions",
 		"application/json", bytes.NewReader(data))
 	if err != nil {
-		return ""
+		return llmResponse{}
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
@@ -156,16 +156,27 @@ func callOMLX(prompt string) string {
 				Content string `json:"content"`
 			} `json:"message"`
 		} `json:"choices"`
+		Usage *struct {
+			PromptTokens     int `json:"prompt_tokens"`
+			CompletionTokens int `json:"completion_tokens"`
+			TotalTokens      int `json:"total_tokens"`
+		} `json:"usage,omitempty"`
 	}
 	if json.Unmarshal(body, &result) == nil && len(result.Choices) > 0 {
-		return strings.TrimSpace(result.Choices[0].Message.Content)
+		content := strings.TrimSpace(result.Choices[0].Message.Content)
+		r := llmResponse{Content: content}
+		if result.Usage != nil {
+			r.PromptTokens = result.Usage.PromptTokens
+			r.CompletionTokens = result.Usage.CompletionTokens
+		}
+		return r
 	}
-	return ""
+	return llmResponse{}
 }
 
-func callAPI(cfg *Config, prompt string) string {
+func callAPI(cfg *Config, prompt string) llmResponse {
 	if cfg.APIKey == "" {
-		return ""
+		return llmResponse{}
 	}
 
 	payload := map[string]interface{}{
@@ -174,14 +185,14 @@ func callAPI(cfg *Config, prompt string) string {
 			{"role": "system", "content": strings.TrimSpace(CompressionPrompt)},
 			{"role": "user", "content": prompt},
 		},
-		"max_tokens": 4000,
+		"max_tokens":  4000,
 		"temperature": 0.2,
 	}
 
 	data, _ := json.Marshal(payload)
 	req, err := http.NewRequest("POST", cfg.APIBase+"/chat/completions", bytes.NewReader(data))
 	if err != nil {
-		return ""
+		return llmResponse{}
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
@@ -189,7 +200,7 @@ func callAPI(cfg *Config, prompt string) string {
 	client := &http.Client{Timeout: 45 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return ""
+		return llmResponse{}
 	}
 	defer resp.Body.Close()
 
@@ -200,12 +211,23 @@ func callAPI(cfg *Config, prompt string) string {
 				Content string `json:"content"`
 			} `json:"message"`
 		} `json:"choices"`
+		Usage *struct {
+			PromptTokens     int `json:"prompt_tokens"`
+			CompletionTokens int `json:"completion_tokens"`
+			TotalTokens      int `json:"total_tokens"`
+		} `json:"usage,omitempty"`
 	}
 	if err := json.Unmarshal(body, &result); err != nil || len(result.Choices) == 0 {
-		return ""
+		return llmResponse{}
 	}
 
-	return strings.TrimSpace(result.Choices[0].Message.Content)
+	content := strings.TrimSpace(result.Choices[0].Message.Content)
+	r := llmResponse{Content: content}
+	if result.Usage != nil {
+		r.PromptTokens = result.Usage.PromptTokens
+		r.CompletionTokens = result.Usage.CompletionTokens
+	}
+	return r
 }
 
 // ExecuteSubtask calls an LLM to perform a single subtask.
@@ -234,39 +256,52 @@ Instructions:
 	)
 
 	// Try oMLX → Ollama → API (cheapest first)
-	result := callOMLX(prompt)
-	if result == "" {
-		result = callOllama(cfg, prompt)
+	resp := callOMLX(prompt)
+	if resp.Content == "" {
+		resp = callOllama(cfg, prompt)
 	}
-	if result == "" {
-		result = callAPI(cfg, prompt)
+	if resp.Content == "" {
+		resp = callAPI(cfg, prompt)
 	}
 
 	status := "completed"
-	if result == "" {
+	if resp.Content == "" {
 		status = "failed"
-	} else if strings.Contains(strings.ToLower(result), "exit criterion is met") ||
-		strings.Contains(strings.ToLower(result), "completed") {
+	} else if strings.Contains(strings.ToLower(resp.Content), "exit criterion is met") ||
+		strings.Contains(strings.ToLower(resp.Content), "completed") {
 		status = "completed"
-	} else if strings.Contains(strings.ToLower(result), "fail") {
+	} else if strings.Contains(strings.ToLower(resp.Content), "fail") {
 		status = "failed"
 	} else {
 		status = "uncertain"
 	}
 
-	if len(result) > 1500 {
-		result = result[:1500] + "..."
+	output := resp.Content
+	if len(output) > 1500 {
+		output = output[:1500] + "..."
+	}
+
+	// Calculate cost from token usage if available
+	costAvailable := resp.PromptTokens > 0 || resp.CompletionTokens > 0
+	cost := 0.0
+	if costAvailable {
+		cost = ComputeCost(route.Model, resp.PromptTokens, resp.CompletionTokens)
 	}
 
 	return Result{
-		ID:     subtask.ID,
-		Goal:   subtask.Goal,
-		Type:   string(subtask.Type),
-		Model:  route.Model,
-		Tier:   route.Tier,
-		Status: status,
-		Output: result,
-		Exit:   subtask.ExitCriterion,
+		ID:               subtask.ID,
+		Goal:             subtask.Goal,
+		Type:             string(subtask.Type),
+		Model:            route.Model,
+		Tier:             route.Tier,
+		Status:           status,
+		Output:           output,
+		Exit:             subtask.ExitCriterion,
+		PromptTokens:     resp.PromptTokens,
+		CompletionTokens: resp.CompletionTokens,
+		TotalTokens:      resp.PromptTokens + resp.CompletionTokens,
+		Cost:             cost,
+		CostAvailable:    costAvailable,
 	}
 }
 
@@ -337,5 +372,7 @@ func ExecuteViaAgent(cfg *Config, subtask Subtask, workdir, agent string) Result
 		Status: status,
 		Output: output,
 		Exit:   subtask.ExitCriterion,
+		// CLI agent output doesn't expose token usage — cost unavailable
+		CostAvailable: false,
 	}
 }

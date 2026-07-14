@@ -29,45 +29,51 @@ const (
 
 // Subtask is a single unit of work from decomposition.
 type Subtask struct {
-	ID          string   `json:"id"`
-	Type        TaskType `json:"type"`
-	Goal        string   `json:"goal"`
-	Files       []string `json:"files"`
-	DependsOn   []string `json:"depends_on"`
-	ExitCriterion string `json:"exit"`
-	EstimatedMin int     `json:"estimated_minutes"`
+	ID            string   `json:"id"`
+	Type          TaskType `json:"type"`
+	Goal          string   `json:"goal"`
+	Files         []string `json:"files"`
+	DependsOn     []string `json:"depends_on"`
+	ExitCriterion string   `json:"exit"`
+	EstimatedMin  int      `json:"estimated_minutes"`
 }
 
 // Route describes which model tier a subtask should use.
 type Route struct {
-	Tier       string `json:"tier"`
-	Model      string `json:"model"`
-	CostFactor int    `json:"cost_factor"`
-	Reason     string `json:"reason"`
+	Tier   string `json:"tier"`
+	Model  string `json:"model"`
+	Reason string `json:"reason"`
 }
 
 // Result is the outcome of executing one subtask.
 type Result struct {
-	ID     string `json:"id"`
-	Goal   string `json:"goal"`
-	Type   string `json:"type"`
-	Model  string `json:"model"`
-	Tier   string `json:"tier"`
-	Status string `json:"status"`
-	Output string `json:"output"`
-	Exit   string `json:"exit"`
+	ID               string  `json:"id"`
+	Goal             string  `json:"goal"`
+	Type             string  `json:"type"`
+	Model            string  `json:"model"`
+	Tier             string  `json:"tier"`
+	Status           string  `json:"status"`
+	Output           string  `json:"output"`
+	Exit             string  `json:"exit"`
+	PromptTokens     int     `json:"prompt_tokens,omitempty"`
+	CompletionTokens int     `json:"completion_tokens,omitempty"`
+	TotalTokens      int     `json:"total_tokens,omitempty"`
+	Cost             float64 `json:"cost,omitempty"`
+	CostAvailable    bool    `json:"cost_available"`
 }
 
 // Report is the full orchestration output.
 type Report struct {
-	Task      string        `json:"task"`
-	WorkDir   string        `json:"workdir"`
-	Subtasks  []Subtask     `json:"subtasks"`
-	Results   []Result      `json:"results"`
-	Duration  string        `json:"duration"`
-	Savings   int           `json:"savings_pct"`
-	Passed    int           `json:"passed"`
-	Failed    int           `json:"failed"`
+	Task          string        `json:"task"`
+	WorkDir       string        `json:"workdir"`
+	Subtasks      []Subtask     `json:"subtasks"`
+	Results       []Result      `json:"results"`
+	Duration      string        `json:"duration"`
+	Passed        int           `json:"passed"`
+	Failed        int           `json:"failed"`
+	TotalCost     float64       `json:"total_cost,omitempty"`
+	TotalTokens   int           `json:"total_tokens,omitempty"`
+	CostAvailable bool          `json:"cost_available"`
 }
 
 // Config holds ORA configuration.
@@ -92,6 +98,20 @@ var TaskRoutes = map[TaskType]struct{ Tier, Model, Desc string }{
 	TaskDebug:        {"flagship", "deepseek-v4-pro", "Root cause analysis"},
 	TaskArchitecture: {"flagship", "deepseek-v4-pro", "System design, tradeoffs"},
 	TaskPlan:         {"mid", "deepseek-v4-flash", "Task decomposition, strategy"},
+}
+
+// ModelPricing maps model IDs to $ per 1M input/output tokens.
+var ModelPricing = map[string]struct{ Input, Output float64 }{
+	"deepseek-v4-flash": {0.14, 0.28},
+	"deepseek-v4-pro":   {1.10, 2.20},
+	"deepseek-chat":     {0.14, 0.28},
+}
+
+// llmResponse holds content and token usage from an LLM call.
+type llmResponse struct {
+	Content          string
+	PromptTokens     int
+	CompletionTokens int
 }
 
 var Emoji = map[string]string{
@@ -211,14 +231,6 @@ func GetRoute(tt TaskType, mode string) Route {
 		tier = "flagship"
 	}
 
-	costFactor := 1
-	switch tier {
-	case "mid":
-		costFactor = 2
-	case "flagship":
-		costFactor = 10
-	}
-
 	model := r.Model
 	if tier == "cheap" {
 		model = "deepseek-v4-flash"
@@ -226,7 +238,19 @@ func GetRoute(tt TaskType, mode string) Route {
 		model = "deepseek-v4-pro"
 	}
 
-	return Route{Tier: tier, Model: model, CostFactor: costFactor, Reason: r.Desc}
+	return Route{Tier: tier, Model: model, Reason: r.Desc}
+}
+
+// ComputeCost returns the estimated dollar cost for a model + token usage.
+// Returns 0 if model isn't in the pricing table.
+func ComputeCost(model string, promptTokens, completionTokens int) float64 {
+	price, ok := ModelPricing[model]
+	if !ok {
+		return 0
+	}
+	inputCost := float64(promptTokens) * price.Input / 1_000_000
+	outputCost := float64(completionTokens) * price.Output / 1_000_000
+	return inputCost + outputCost
 }
 
 // DetectLocalModels returns available local LLM models from Ollama and oMLX.

@@ -29,6 +29,7 @@ func Orchestrate(cfg *Config, task, context string, planOnly bool) int {
 		}, workdir)
 		PrintResults([]Result{result})
 		elapsed := time.Since(start).Truncate(time.Second)
+		printCostLine([]Result{result})
 		fmt.Printf("\n  %s  %s\n", Emoji["time"], elapsed)
 		if result.Status == "failed" {
 			return 1
@@ -83,33 +84,37 @@ func Orchestrate(cfg *Config, task, context string, planOnly bool) int {
 		}
 	}
 
-	totalTasks := len(subtasks)
-	allFlagshipCost := totalTasks * 10
-	actualCost := 0
-	for _, t := range subtasks {
-		actualCost += GetRoute(t.Type, cfg.Mode).CostFactor
-	}
-	savings := 0
-	if allFlagshipCost > 0 {
-		savings = 100 - (actualCost * 100 / allFlagshipCost)
-	}
-
 	PrintHeader("RECONCILIATION")
 	PrintResults(results)
 
-	fmt.Printf("\n  %s  ~%d%% cheaper than all-flagship\n", Emoji["recycle"], savings)
+	// Print cost (only if any result has cost data)
+	printCostLine(results)
+
 	fmt.Printf("\n  %s  %s\n", Emoji["time"], elapsed)
 
 	// Save report
+	totalCost := 0.0
+	totalTokens := 0
+	costAvailable := false
+	for _, r := range results {
+		totalCost += r.Cost
+		totalTokens += r.TotalTokens
+		if r.CostAvailable {
+			costAvailable = true
+		}
+	}
+
 	report := &Report{
-		Task:     task,
-		WorkDir:  workdir,
-		Subtasks: subtasks,
-		Results:  results,
-		Duration: elapsed.String(),
-		Savings:  savings,
-		Passed:   passed,
-		Failed:   failed,
+		Task:          task,
+		WorkDir:       workdir,
+		Subtasks:      subtasks,
+		Results:       results,
+		Duration:      elapsed.String(),
+		Passed:        passed,
+		Failed:        failed,
+		TotalCost:     totalCost,
+		TotalTokens:   totalTokens,
+		CostAvailable: costAvailable,
 	}
 	reportPath := workdir + "/.ora-report.json"
 	if err := SaveReport(report, reportPath); err == nil {
@@ -120,6 +125,25 @@ func Orchestrate(cfg *Config, task, context string, planOnly bool) int {
 		return 1
 	}
 	return 0
+}
+
+// printCostLine prints the total cost and tokens for a set of results.
+func printCostLine(results []Result) {
+	totalCost := 0.0
+	totalTokens := 0
+	anyAvailable := false
+	for _, r := range results {
+		totalCost += r.Cost
+		totalTokens += r.TotalTokens
+		if r.CostAvailable {
+			anyAvailable = true
+		}
+	}
+	if anyAvailable {
+		fmt.Printf("\n  %s  $%.6f · %d tokens total\n", Emoji["token"], totalCost, totalTokens)
+	} else {
+		fmt.Printf("\n  %s  Run cost: unavailable (token usage not returned by provider)\n", Emoji["info"])
+	}
 }
 
 // PrintHeader prints a section header.
@@ -171,8 +195,12 @@ func PrintResults(results []Result) {
 		} else if r.Status != "completed" {
 			icon = Emoji["warn"]
 		}
+		costStr := ""
+		if r.CostAvailable {
+			costStr = fmt.Sprintf(" $%.6f", r.Cost)
+		}
 		fmt.Printf("\n  %s [%s] %s", icon, r.ID, r.Goal)
-		fmt.Printf("\n     %s %s (%s) — %s", Emoji["token"], r.Model, r.Tier, r.Status)
+		fmt.Printf("\n     %s %s (%s) — %s%s", Emoji["token"], r.Model, r.Tier, r.Status, costStr)
 	}
 
 	fmt.Printf("\n\n  %s  %d/%d passed", Emoji["done"], passed, len(results))

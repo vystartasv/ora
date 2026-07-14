@@ -69,7 +69,7 @@ ora "review the authentication flow" --agent codex
 ┌──────────────────────────────────────────────┐
 │  5. RECONCILE — verify + merge + report       │
 │     ✅ All 5 subtasks completed               │
-│     🪙 Savings vs all-flagship per run        │
+│     🪙 Cost per run (tokens × model pricing)   │
 │     📄 Report saved to .ora-report.json       │
 └──────────────────────────────────────────────┘
 ```
@@ -116,17 +116,17 @@ Pure Go. The MCP server is implemented in Go via `mcp.go`: stdio mode for Claude
 
 Auto-detects `DEEPSEEK_API_KEY` and `OPENAI_API_KEY` as fallbacks.
 
-## Cost model
+## Routing
 
-ORA estimates cost savings based on the **cost factor** assigned to each model tier:
+ORA routes each subtask to the cheapest adequate model for that type:
 
-| Tier | Cost factor | Used for |
-|------|-------------|---------|
-| cheap | 1 | lookup, research |
-| mid | 2 | code_gen, review, plan |
-| flagship | 10 | debug, architecture |
+| Task type | Tier | Model |
+|-----------|------|-------|
+| lookup, research | cheap | deepseek-v4-flash |
+| code_gen, review, plan | mid | deepseek-v4-flash |
+| debug, architecture | flagship | deepseek-v4-pro |
 
-Savings are calculated per run as `100% − (actual cost / all-flagship cost × 100)`. The `.ora-report.json` saved after each run reports the exact breakdown — subtasks, models used, and the savings percentage for that specific task. Any stranger can reproduce: run `ora --plan "a task"`, read the routing in the plan, apply the cost factors above, and confirm the savings figure in the report.
+Modes let you override routing: `--fast` forces everything to cheap, `--deep` forces everything to flagship, `--plan` shows the route without executing. Actual token usage and per-model cost (from published API pricing) are recorded in `.ora-report.json` after each run, and printed in the CLI summary. If the provider doesn't return token counts, cost is shown as unavailable.
 
 ## License
 

@@ -69,7 +69,7 @@ ora "review the authentication flow" --agent codex
 ┌──────────────────────────────────────────────┐
 │  5. RECONCILE — verify + merge + report       │
 │     ✅ All 5 subtasks completed               │
-│     🪙 68% cheaper than all-flagship          │
+│     🪙 Savings vs all-flagship per run        │
 │     📄 Report saved to .ora-report.json       │
 └──────────────────────────────────────────────┘
 ```
@@ -115,6 +115,18 @@ Pure Go. The MCP server is implemented in Go via `mcp.go`: stdio mode for Claude
 | `ORA_AGENT` | `auto` | Agent: hermes, claude, pi, codex |
 
 Auto-detects `DEEPSEEK_API_KEY` and `OPENAI_API_KEY` as fallbacks.
+
+## Cost model
+
+ORA estimates cost savings based on the **cost factor** assigned to each model tier:
+
+| Tier | Cost factor | Used for |
+|------|-------------|---------|
+| cheap | 1 | lookup, research |
+| mid | 2 | code_gen, review, plan |
+| flagship | 10 | debug, architecture |
+
+Savings are calculated per run as `100% − (actual cost / all-flagship cost × 100)`. The `.ora-report.json` saved after each run reports the exact breakdown — subtasks, models used, and the savings percentage for that specific task. Any stranger can reproduce: run `ora --plan "a task"`, read the routing in the plan, apply the cost factors above, and confirm the savings figure in the report.
 
 ## License
 
